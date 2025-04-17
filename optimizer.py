@@ -1,3 +1,4 @@
+# The below code is mostly used from the Heavyball library
 """
 SOAP Optimizer implementation.
 """
