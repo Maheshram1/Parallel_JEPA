@@ -56,7 +56,6 @@ config.use_amp = True
 # ... and others
 ```
 
-
 You can modify settings like learning rates, warmup, batch size schedule, and AMP usage directly in the Config class (config.py).
 
 Training
@@ -115,9 +114,3 @@ Checkpointing Helpers: save_checkpoint() and load_checkpoint() in utils.py provi
 Teacher Utilities: load_pretrained_teacher_weights() handles loading external weights, while refresh_teacher() copies student weights to the teacher (simulating momentum update) and freezes the teacher each epoch (utils.py#L224-L368).
 
 Feel free to file issues or contribute enhancements—Parallel JEPA is designed for extensibility to new architectures, datasets, and optimization strategies.
-
-IGNORE_WHEN_COPYING_START
-content_copy
-download
-Use code with caution.
-IGNORE_WHEN_COPYING_END
