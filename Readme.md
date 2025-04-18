@@ -64,53 +64,33 @@ Launch distributed training with torchrun (or torch.distributed.run):
 
 # Example: Single node, 4 GPUs
 torchrun --standalone --nnodes=1 --nproc_per_node=4 main.py
-IGNORE_WHEN_COPYING_START
-content_copy
-download
-Use code with caution.
-Bash
-IGNORE_WHEN_COPYING_END
 
-The script (main.py) will:
+The script (`main.py`) will:
 
-Initialize DDP and set the CUDA device based on LOCAL_RANK (utils.py#L15-L30).
+1.  Initialize DDP and set the CUDA device based on `LOCAL_RANK` ([utils.py#L15-L30](https://github.com/Maheshram1/Parallel_JEPA/blob/main/utils.py#L15-L30)).
+2.  Build student (`VisionTransformer`) and teacher (`VisionTransformer1`) models and optionally compile them with `torch.compile` ([main.py#L120-L147](https://github.com/Maheshram1/Parallel_JEPA/blob/main/main.py#L120-L147)).
+3.  Load or initialize teacher weights, **freeze its parameters**, and wrap both models in DDP ([main.py#L150-L175](https://github.com/Maheshram1/Parallel_JEPA/blob/main/main.py#L150-L175)).
+4.  Create MSE loss, SOAP optimizer, and LambdaLR scheduler with cosine decay & linear warmup ([main.py#L178-L220](https://github.com/Maheshram1/Parallel_JEPA/blob/main/main.py#L178-L220)).
+5.  Run epochs: dynamic batch resizing, forwarding through student & teacher, computing loss, backward pass with AMP, optimizer & scheduler steps, teacher refresh, and periodic checkpointing/logging ([main.py#L253-L350](https://github.com/Maheshram1/Parallel_JEPA/blob/main/main.py#L253-L350), [engine.py](https://github.com/Maheshram1/Parallel_JEPA/blob/main/engine.py)).
 
-Build student (VisionTransformer) and teacher (VisionTransformer1) models and optionally compile them with torch.compile (main.py#L120-L147).
+## Evaluation
 
-Load or initialize teacher weights, freeze its parameters, and wrap both models in DDP (main.py#L150-L175).
+Validation occurs at the end of each training epoch using the same DDP setup. It reports the average MSE loss between the student's reconstructed patch representations and the teacher’s intermediate features across the validation set ([engine.py#L167-L258](https://github.com/Maheshram1/Parallel_JEPA/blob/main/engine.py#L167-L258)).
 
-Create MSE loss, SOAP optimizer, and LambdaLR scheduler with cosine decay & linear warmup (main.py#L178-L220).
+## Checkpoints & Logging
 
-Run epochs: dynamic batch resizing, forwarding through student & teacher, computing loss, backward pass with AMP, optimizer & scheduler steps, teacher refresh, and periodic checkpointing/logging (main.py#L253-L350, engine.py).
+*   **Checkpoints**: Saved by the main process (rank 0) into the `checkpoints/` directory:
+    *   `latest_checkpoint.pth`: Overwritten after every epoch.
+    *   `best_model.pth`: Overwritten when validation loss improves.
+    *   `checkpoint_epoch_*.pth`: Saved periodically (default: every 10 epochs).
+    ([main.py#L325-L341](https://github.com/Maheshram1/Parallel_JEPA/blob/main/main.py#L325-L341)).
+*   **Logs**: Saved by the main process into the `logs/` directory:
+    *   `training_log.txt`: Detailed text log including epoch times, losses, and LR.
+    *   `loss_log.csv`: CSV file tracking Epoch, TrainLoss, ValLoss, LearningRate for easier analysis.
+    ([main.py#L317-L324](https://github.com/Maheshram1/Parallel_JEPA/blob/main/main.py#L317-L324)).
 
-Evaluation
+## Utilities
 
-Validation occurs at the end of each training epoch using the same DDP setup. It reports the average MSE loss between the student's reconstructed patch representations and the teacher’s intermediate features across the validation set (engine.py#L167-L258).
-
-Checkpoints & Logging
-
-Checkpoints: Saved by the main process (rank 0) into the checkpoints/ directory:
-
-latest_checkpoint.pth: Overwritten after every epoch.
-
-best_model.pth: Overwritten when validation loss improves.
-
-checkpoint_epoch_*.pth: Saved periodically (default: every 10 epochs).
-(main.py#L325-L341).
-
-Logs: Saved by the main process into the logs/ directory:
-
-training_log.txt: Detailed text log including epoch times, losses, and LR.
-
-loss_log.csv: CSV file tracking Epoch, TrainLoss, ValLoss, LearningRate for easier analysis.
-(main.py#L317-L324).
-
-Utilities
-
-DDP Setup & Cleanup: setup(), cleanup(), and is_main_process() in utils.py manage the distributed environment (utils.py#L15-L46).
-
-Checkpointing Helpers: save_checkpoint() and load_checkpoint() in utils.py provide robust saving/loading, handling DDP/compile wrappers and ensuring CPU-based saving for portability (utils.py#L63-L219).
-
-Teacher Utilities: load_pretrained_teacher_weights() handles loading external weights, while refresh_teacher() copies student weights to the teacher (simulating momentum update) and freezes the teacher each epoch (utils.py#L224-L368).
-
-Feel free to file issues or contribute enhancements—Parallel JEPA is designed for extensibility to new architectures, datasets, and optimization strategies.
+*   **DDP Setup & Cleanup**: `setup()`, `cleanup()`, and `is_main_process()` in `utils.py` manage the distributed environment ([utils.py#L15-L46](https://github.com/Maheshram1/Parallel_JEPA/blob/main/utils.py#L15-L46)).
+*   **Checkpointing Helpers**: `save_checkpoint()` and `load_checkpoint()` in `utils.py` provide robust saving/loading, handling DDP/compile wrappers and ensuring CPU-based saving for portability ([utils.py#L63-L219](https://github.com/Maheshram1/Parallel_JEPA/blob/main/utils.py#L63-L219)).
+*   **Teacher Utilities**: `load_pretrained_teacher_weights()` handles loading external weights, while `refresh_teacher()` copies student weights to the teacher (simulating momentum update) and freezes the teacher each epoch ([utils.py#L224-L368](https://github.com/Maheshram1/Parallel_JEPA/blob/main/utils.py#L224-L368)).
