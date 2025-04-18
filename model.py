@@ -164,9 +164,9 @@ class TransformerBlock(nn.Module):
         Returns:
             torch.Tensor: Output tensor (B, N, C).
         """
-        attn_output = self.attn(self.norm1(x), mask=mask) # Pass mask to attention
-        x = x + attn_output # Residual connection 1
-        x = x + self.mlp(self.norm2(x)) # Residual connection 2
+        attn_output = self.attn(self.norm1(x), mask=mask) 
+        x = x + attn_output 
+        x = x + self.mlp(self.norm2(x)) 
         return x
 
 class VisionTransformer(nn.Module):
@@ -235,12 +235,10 @@ class VisionTransformer(nn.Module):
     def _init_weights_general(self, m):
         """Applies weight initialization to linear and layernorm layers."""
         if isinstance(m, nn.Linear):
-            # Initialize linear layers with truncated normal
             nn.init.trunc_normal_(m.weight, std=0.02)
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
         elif isinstance(m, nn.LayerNorm):
-            # Initialize layernorm layers with constants
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
@@ -260,7 +258,6 @@ class VisionTransformer(nn.Module):
         x = self.patch_embed(x) # (B, N, D)
         x = x + self.pos_embed # Add positional embedding: (B, N, D)
 
-        # --- Shuffling and Masking Logic ---
         # Shuffle patch order per image
         batch_indices = torch.arange(B, device=x.device).unsqueeze(1).expand(-1, self.num_patches) # (B, N)
         random_indices = torch.rand(B, self.num_patches, device=x.device).argsort(dim=1) # (B, N) random permutation
@@ -271,9 +268,8 @@ class VisionTransformer(nn.Module):
         for i in range(self.num_parts):
             start = i * self.block_size
             end = start + self.block_size
-            mask[start:end, start:end] = 1 # Allow attention within each block (value 1 means allow)
+            mask[start:end, start:end] = 1 # Allow attention within each block
         mask = mask.unsqueeze(0).expand(B, -1, -1) # (B, N, N)
-        # --- End Shuffling and Masking ---
 
         # Encoder blocks with masking
         for block in self.blocks:
@@ -287,7 +283,7 @@ class VisionTransformer(nn.Module):
         decoder_input = self.decoder_token.repeat(B, self.num_parts, self.num_patches, 1) # (B, num_parts, N, D)
 
         # Scatter the encoded features (from encoder_output) back into the decoder input
-        # based on their *original* positions before shuffling.
+        # based on their original positions before shuffling.
         for k in range(self.num_parts):
             # Identify the section of the shuffled sequence corresponding to this part
             start_idx = k * self.block_size
@@ -299,7 +295,6 @@ class VisionTransformer(nn.Module):
             # Prepare indices for scatter operation
             scatter_indices = positions.unsqueeze(-1).expand(-1, -1, self.embed_dim) # (B, block_size, D)
             # Scatter the encoded features into the k-th part of the decoder input at the correct positions
-            # Note: scatter_ operates in-place
             decoder_input[:, k, :, :].scatter_(dim=1, index=scatter_indices, src=current_block_encoded)
 
         # Add decoder positional embedding (applied to all parts)
@@ -312,10 +307,6 @@ class VisionTransformer(nn.Module):
         for block in self.decoder_blocks:
             # Decoder does not use masking, it tries to reconstruct the full sequence
             merged_input = block(merged_input, mask=None) # (B * num_parts, N, D)
-
-        # --- End Decoder Logic ---
-
-        # Return encoder output (after shuffling/masking) and normalized decoder output
         return encoder_output, self.norm(merged_input)
 
 
@@ -346,15 +337,15 @@ class VisionTransformer1(nn.Module):
         self.num_patches = num_patches
         self.in_channels = in_channels
         # Standard ViT components
-        self.num_parts = 4 # Kept for consistency if needed elsewhere, but not used in forward
+        # self.num_parts = 4 # Kept for consistency if needed elsewhere, but not used in forward
         self.block_size = num_patches // self.num_parts # Kept for consistency
         self.embed_dim = embed_dim
 
         # Learnable parameters (standard ViT only needs pos_embed)
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, embed_dim)) # Standard positional embedding
         # Decoder token/embed might not be strictly necessary if only using encoder output, but kept for structural consistency
-        self.decoder_token = nn.Parameter(torch.zeros(1, 1, embed_dim)) # Potentially unused
-        self.decoder_pos_embed = nn.Parameter(torch.zeros(1, num_patches, embed_dim)) # Potentially unused
+        self.decoder_token = nn.Parameter(torch.zeros(1, 1, embed_dim)) #kept for structural consistency
+        self.decoder_pos_embed = nn.Parameter(torch.zeros(1, num_patches, embed_dim)) #kept for structural consistency
 
         # Main transformer blocks (encoder)
         self.blocks = nn.ModuleList([
@@ -419,7 +410,5 @@ class VisionTransformer1(nn.Module):
         for block in self.decoder_blocks:
             x = block(x, mask=None) # (B, N, D)
 
-        # Return the intermediate representation and the final normalized output
-        # The target for the student is intermediate_output (before normalization)
-        # The second element is the final output after decoder blocks and normalization
-        return intermediate_output, self.norm(x) # Use self.norm on the final output
+    
+        return self.norm(intermediate_output), x # There is no need for anything other than Encoder for the teacher in the final version, I'm keeping the same structure for ablations. 
