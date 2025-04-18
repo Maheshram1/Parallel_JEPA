@@ -28,15 +28,12 @@ from utils import (setup, cleanup, is_main_process, save_checkpoint,
 from engine import train, evaluate # Import train/eval functions
 
 
-
-# --- Set up logging ---
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(name)s:%(lineno)d - %(levelname)s - %(message)s',
                     datefmt='%Y-%m-%d %H:%M:%S',
                     force=True)
 logger = logging.getLogger(__name__) # Get logger for this module (__main__)
 
-# Adjust logging level for non-main processes AFTER basicConfig
 if 'RANK' in os.environ:
     try:
         rank = int(os.environ['RANK'])
@@ -48,7 +45,6 @@ if 'RANK' in os.environ:
 
 logger.info("Script started")
 
-# --- Directory creation (only on main process) ---
 if os.environ.get('RANK', '0') == '0':
     try:
         os.makedirs('checkpoints', exist_ok=True)
@@ -57,7 +53,6 @@ if os.environ.get('RANK', '0') == '0':
     except OSError as e:
         logger.error(f"Error creating directories: {e}")
 
-# --- Main DDP worker function ---
 def main_worker(local_rank: int, world_size: int):
     """
     Main function executed by each DDP process.
@@ -70,12 +65,10 @@ def main_worker(local_rank: int, world_size: int):
     global_rank = dist.get_rank() # Get global rank after setup
     logger.info(f"Process Initialized: Global Rank {global_rank}/{world_size}, Local Rank {local_rank}.")
 
-    # --- Configuration ---
     config = Config()
     config.device = torch.device(f'cuda:{local_rank}') # Assign device based on local rank
     logger.info(f"Rank {global_rank}: Config loaded. Device: {config.device}")
 
-    # --- Data Transforms ---
     train_transform = transforms.Compose([
         transforms.RandomResizedCrop(config.img_size, scale=(0.08, 1.0), ratio=(3./4., 4./3.)),
         transforms.RandomHorizontalFlip(),
@@ -91,8 +84,7 @@ def main_worker(local_rank: int, world_size: int):
     ])
     logger.info(f"Rank {global_rank}: Data transforms defined.")
 
-    # --- Dataset Loading ---
-    # !!! IMPORTANT: Replace these placeholder paths with actual ImageNet paths !!!
+    # !Replace these placeholder paths with actual ImageNet paths!
     imagenet_train_path = '/nobackup/Imagenet/train' # e.g., '/path/to/imagenet/train'
     imagenet_val_path = '/nobackup/Imagenet/ILSVRC2012_img_val' # e.g., '/path/to/imagenet/val'
 
@@ -106,13 +98,10 @@ def main_worker(local_rank: int, world_size: int):
     except Exception as e:
          logger.error(f"Rank {global_rank}: Error loading ImageNet dataset: {e}", exc_info=True); cleanup(); return
 
-    # --- Distributed Samplers ---
     train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=global_rank, shuffle=True, drop_last=True)
     val_sampler = DistributedSampler(val_dataset, num_replicas=world_size, rank=global_rank, shuffle=False, drop_last=False) # No drop_last for val
     logger.info(f"Rank {global_rank}: Distributed samplers created.")
 
-    # --- Model Initialization ---
-    # Initialize models on the correct device *before* wrapping with DDP
     student_model = VisionTransformer(
         img_size=config.img_size, patch_size=config.patch_size, embed_dim=config.embed_dim,
         depth=config.num_layers, num_heads=config.num_heads, mlp_ratio=config.mlp_ratio
@@ -123,7 +112,6 @@ def main_worker(local_rank: int, world_size: int):
     ).to(config.device)
     logger.info(f"Rank {global_rank}: Student/Teacher models initialized on {config.device}.")
 
-    # --- Compile Models (Optional) ---
     use_compile = True # Set to False to disable torch.compile
     if use_compile:
         try:
@@ -135,32 +123,25 @@ def main_worker(local_rank: int, world_size: int):
         except Exception as e:
             logger.warning(f"Rank {global_rank}: Model compilation failed: {e}. Proceeding without compilation.", exc_info=True)
 
-    # --- Load Pretrained Teacher (Optional, before DDP wrapping) ---
     # pretrained_teacher_path = '/path/to/your/pretrained_teacher_checkpoint.pth'
     pretrained_teacher_path = None # Set path or None
     # pretrained_teacher_path = '/u/m/a/maheshram/mahesh/checkpoints_imagenet_1/checkpoint_epoch_91.pth' # Example
 
     if pretrained_teacher_path:
         logger.info(f"Rank {global_rank}: Attempting to load pretrained teacher weights from: {pretrained_teacher_path}")
-        # Pass the unwrapped model instance if compile was used
         teacher_model_uncompiled = getattr(teacher_model, '_orig_mod', teacher_model)
         teacher_model_uncompiled = load_pretrained_teacher_weights(teacher_model_uncompiled, pretrained_teacher_path)
-        # If compile was used, the original teacher_model variable still points to the compiled wrapper
-        # No need to reassign unless load_pretrained_teacher_weights returns a new instance (it shouldn't)
+
         for p in teacher_model.parameters(): p.requires_grad = False # Freeze after loading
         logger.info(f"Rank {global_rank}: Teacher parameters frozen after attempting pretrained load.")
     else:
         logger.info(f"Rank {global_rank}: No pretrained teacher path. Teacher will be initialized from student later.")
 
 
-    # --- Wrap models with DDP ---
-    # find_unused_parameters can be True if loss doesn't use all outputs, potentially slower
-    # Set to False if sure all parameters contribute to loss computation for potential speedup
     student_model = DDP(student_model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True)
     teacher_model = DDP(teacher_model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True)
     logger.info(f"Rank {global_rank}: Models wrapped with DDP.")
 
-    # --- Initialize Teacher Weights (if not loaded) & Freeze ---
     if not pretrained_teacher_path:
         logger.info(f"Rank {global_rank}: Initializing teacher weights from student (after DDP wrap)...")
         refresh_teacher(student_model, teacher_model) # Copies weights and freezes teacher
@@ -170,21 +151,12 @@ def main_worker(local_rank: int, world_size: int):
         for p in teacher_model.parameters(): p.requires_grad = False
         logger.info(f"Rank {global_rank}: Ensured teacher parameters remain frozen.")
 
-
-    # --- Loss Function ---
     criterion = nn.MSELoss()
     logger.info(f"Rank {global_rank}: Loss function (MSELoss) defined.")
 
-    # --- Optimizer ---
-    # Optimize only the student model's parameters
-    # Pass the DDP-wrapped student model; optimizer needs to handle unwrapping if necessary,
-    # or optimize student_model.module.parameters(). SOAP seems designed to handle params directly.
-    # Let's pass the DDP model's parameters directly.
     optimizer = SOAP(student_model.parameters(), lr=config.base_learning_rate)
     logger.info(f"Rank {global_rank}: SOAP optimizer initialized for student model parameters.")
 
-
-    # --- Learning Rate Scheduler ---
     # Calculate total steps based on dataset size, global batch size, and epochs
     global_initial_batch_size = config.get_batch_size(0)
     per_process_initial_batch = max(1, global_initial_batch_size // world_size)
@@ -220,11 +192,9 @@ def main_worker(local_rank: int, world_size: int):
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
     logger.info(f"Rank {global_rank}: LambdaLR scheduler initialized.")
 
-    # --- Mixed Precision Scaler ---
     scaler = GradScaler() if config.use_amp else None
     logger.info(f"Rank {global_rank}: GradScaler {'enabled' if config.use_amp else 'disabled'}.")
 
-    # --- Checkpoint Loading ---
     start_epoch = 0
     best_loss = float('inf')
     checkpoint_dir = 'checkpoints'
@@ -245,10 +215,8 @@ def main_worker(local_rank: int, world_size: int):
     else:
         logger.info(f"Rank {global_rank}: No checkpoint found or loaded, starting training from scratch.")
 
-    # Barrier after potential teacher refresh (though refresh is local, ensure state is consistent)
     if world_size > 1: dist.barrier()
 
-    # --- Log File Setup (after potential checkpoint loading) ---
     loss_log_file = os.path.join('logs', 'loss_log.csv')
     if is_main_process(global_rank):
         if start_epoch == 0: # Only clear/create logs if starting from scratch
@@ -256,7 +224,6 @@ def main_worker(local_rank: int, world_size: int):
              if os.path.exists(loss_log_file): os.remove(loss_log_file)
              with open(loss_log_file, 'w') as f: f.write("Epoch,TrainLoss,ValLoss,LearningRate\n")
 
-    # --- Training Loop ---
     logger.info(f"Rank {global_rank}: Starting training loop from epoch {start_epoch} to {config.num_epochs-1}")
     epoch_times = []
 
@@ -268,7 +235,6 @@ def main_worker(local_rank: int, world_size: int):
         train_sampler.set_epoch(epoch)
         if isinstance(val_sampler, DistributedSampler): val_sampler.set_epoch(epoch)
 
-        # --- Dynamic Batch Size ---
         # Note: Creating DataLoader inside the loop is necessary if batch size changes per epoch.
         current_global_batch_size = config.get_batch_size(epoch)
         if world_size > 0 and current_global_batch_size % world_size != 0:
@@ -281,10 +247,7 @@ def main_worker(local_rank: int, world_size: int):
              logger.error(f"Rank {global_rank}: Global batch size <= 0 for epoch {epoch+1}. Skipping epoch."); continue
         per_process_batch_size = max(1, current_global_batch_size // world_size) if world_size > 0 else current_global_batch_size
         if is_main_process(global_rank): logger.info(f"Epoch {epoch+1}: Global BS={current_global_batch_size}, Per-Process BS={per_process_batch_size}")
-        # --- End Dynamic Batch Size ---
 
-        # --- DataLoaders ---
-        # Determine num_workers based on available CPUs per GPU
         cpus_per_gpu = os.cpu_count() // torch.cuda.device_count() if torch.cuda.is_available() else 2
         num_workers_per_gpu = min(4, cpus_per_gpu) # Use a reasonable max like 4
         if is_main_process(global_rank): logger.info(f"Using {num_workers_per_gpu} DataLoader workers per GPU.")
@@ -299,14 +262,12 @@ def main_worker(local_rank: int, world_size: int):
             persistent_workers=True if num_workers_per_gpu > 0 else False )
         logger.debug(f"Rank {global_rank}: DataLoaders created for epoch {epoch+1}.")
 
-        # --- Train & Evaluate ---
         train_loss_avg, current_lr = train(student_model, teacher_model, train_loader, criterion, optimizer, scheduler, config.device, epoch, config, scaler, global_rank, world_size)
         val_loss_avg = evaluate(student_model, teacher_model, val_loader, criterion, config.device, epoch, config, global_rank, world_size)
         epoch_end_time = time.time()
         epoch_duration = epoch_end_time - epoch_start_time
         epoch_times.append(epoch_duration)
 
-        # --- Logging and Checkpointing (Main Process Only) ---
         if is_main_process(global_rank):
             log_message = (
                  f"Epoch [{epoch+1}/{config.num_epochs}] | Time: {epoch_duration:.2f}s | "
@@ -337,18 +298,15 @@ def main_worker(local_rank: int, world_size: int):
         # Barrier ensures all ranks finish epoch + refresh before next one starts
         if world_size > 1: dist.barrier()
 
-    # --- End of Training Loop ---
     if is_main_process(global_rank):
         avg_epoch_time = sum(epoch_times) / len(epoch_times) if epoch_times else 0
         final_message = f"Training finished after {config.num_epochs} epochs. Best Val Loss: {best_loss:.4f}. Avg Epoch Time: {avg_epoch_time:.2f}s"
         print(final_message)
         log_to_file(config.log_file, final_message)
 
-    cleanup() # Clean up DDP resources
+    cleanup() 
 
-# --- Entry Point ---
 if __name__ == "__main__":
-    # Check if running under torchrun/DDP
     if 'RANK' in os.environ and 'WORLD_SIZE' in os.environ and 'LOCAL_RANK' in os.environ:
         try:
             world_size = int(os.environ["WORLD_SIZE"])
