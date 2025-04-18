@@ -1,7 +1,3 @@
-Okay, my apologies for the misunderstanding! You want the final README.md content as a single block for easy copying.
-
-Here it is:
-
 # Parallel JEPA
 
 Parallel JEPA is a scalable PyTorch framework for training Vision Transformer‑based student‑teacher models under the Joint Embedding Predictive Architecture (JEPA) paradigm. It splits image patches into multiple parts, shuffles and masks them in the student encoder, and reconstructs full patch representations in parallel decoder streams, using mean‑squared error against a frozen “teacher” ViT’s intermediate features. The code is fully distributed via PyTorch DDP, supports mixed precision with `torch.cuda.amp`, and employs a custom SOAP optimizer for adaptive gradient preconditioning.
