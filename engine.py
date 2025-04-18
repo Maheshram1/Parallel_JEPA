@@ -70,7 +70,6 @@ def train(student_model: torch.nn.Module, teacher_model: torch.nn.Module,
              continue
         global_batch_size = local_batch_size * world_size
 
-        # --- Forward and Backward Pass ---
         optimizer.zero_grad(set_to_none=True) # Reset gradients
 
         # Mixed Precision Context
@@ -96,7 +95,6 @@ def train(student_model: torch.nn.Module, teacher_model: torch.nn.Module,
                      continue
 
                 teacher_target = teacher_intermediate.repeat_interleave(num_parts, dim=0)
-                # --- End Teacher Target Prep ---
 
             # Ensure shapes match before loss calculation
             if student_output.shape != teacher_target.shape:
@@ -109,9 +107,7 @@ def train(student_model: torch.nn.Module, teacher_model: torch.nn.Module,
         # Check for NaN/inf loss before backward
         if not torch.isfinite(loss):
              logger.error(f"Rank {rank}, Epoch {epoch+1}, Batch {batch_idx}: Non-finite loss ({loss.item()}) detected BEFORE backward. Skipping step.")
-             # Skip optimizer/scheduler step. Update scaler to adjust scale.
              if scaler: scaler.update()
-             # Consider whether to step scheduler here or not. Stepping might be safer.
              # scheduler.step() # Optional: step scheduler even on bad batch
              data_load_start_time = time.time() # Reset timer
              continue
@@ -130,10 +126,8 @@ def train(student_model: torch.nn.Module, teacher_model: torch.nn.Module,
             # torch.nn.utils.clip_grad_norm_(student_model.parameters(), max_norm=1.0)
             optimizer.step()
 
-        # Step the scheduler *after* the optimizer step
         scheduler.step()
 
-        # --- Logging and Tracking ---
         step_loss = loss.item()
         total_loss_accumulated += step_loss
         batch_count += 1
@@ -153,7 +147,6 @@ def train(student_model: torch.nn.Module, teacher_model: torch.nn.Module,
 
         data_load_start_time = time.time() # Reset data load timer for next batch
 
-    # --- Epoch End: Calculate and Synchronize Average Loss ---
     avg_loss_epoch = total_loss_accumulated / batch_count if batch_count > 0 else 0.0
     avg_loss_tensor = torch.tensor(avg_loss_epoch, device=device)
 
@@ -221,7 +214,6 @@ def evaluate(student_model: torch.nn.Module, teacher_model: torch.nn.Module,
                 # Teacher forward pass
                 teacher_intermediate, _ = teacher_model(imgs)
 
-                # --- Prepare Teacher Target ---
                 num_parts = student_output.shape[0] // local_batch_size
                 expected_parts = getattr(config, 'num_parts', 4)
                 if num_parts != expected_parts and local_batch_size > 0:
@@ -232,7 +224,6 @@ def evaluate(student_model: torch.nn.Module, teacher_model: torch.nn.Module,
                      continue
 
                 teacher_target = teacher_intermediate.repeat_interleave(num_parts, dim=0)
-                # --- End Teacher Target Prep ---
 
                 # Ensure shapes match before loss calculation
                 if student_output.shape != teacher_target.shape:
