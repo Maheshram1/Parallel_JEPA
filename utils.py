@@ -59,7 +59,7 @@ def is_main_process(global_rank: int = -1) -> bool:
     """
     if not dist.is_initialized():
         # If DDP not initialized, assume single process, rank 0 is main
-        return True # Or check if global_rank == 0 if passed? Safer to assume True.
+        return True 
     # If initialized, use the definitive global rank
     current_global_rank = dist.get_rank()
     return current_global_rank == 0
@@ -83,13 +83,11 @@ def log_to_file(log_file: str, message: str):
     try:
         # Ensure the directory exists
         log_dir = os.path.dirname(log_file)
-        if log_dir: # Create directory only if log_file includes a path
+        if log_dir:
              os.makedirs(log_dir, exist_ok=True)
-        # Append message to the file
         with open(log_file, 'a') as f:
             f.write(message + '\n')
     except IOError as e:
-        # Use standard logging to report error if file logging fails
         logging.error(f"[Rank 0]: Could not write to log file {log_file}: {e}")
 
 
@@ -122,7 +120,6 @@ def save_checkpoint(model: torch.nn.Module, optimizer: torch.optim.Optimizer, sc
         if ckpt_dir:
             os.makedirs(ckpt_dir, exist_ok=True)
 
-        # --- Get the underlying module state dict, handling DDP and compile ---
         model_to_save = model
         # 1. Unwrap torch.compile (if applied)
         if hasattr(model_to_save, '_orig_mod'):
@@ -131,19 +128,17 @@ def save_checkpoint(model: torch.nn.Module, optimizer: torch.optim.Optimizer, sc
         if isinstance(model_to_save, DDP):
             model_to_save = model_to_save.module
         model_state_dict = model_to_save.state_dict()
-        # --- End unwrap ---
 
         # Prepare checkpoint data dictionary
         checkpoint = {
-            'epoch': epoch, # Save the epoch *just completed*
+            'epoch': epoch, 
             'model_state_dict': model_state_dict,
             'optimizer_state_dict': optimizer.state_dict(),
             'scheduler_state_dict': scheduler.state_dict(),
-            'loss': loss, # Typically the validation loss at this epoch
+            'loss': loss,
         }
         logging.debug("[Rank 0]: Prepared checkpoint dictionary for epoch %d.", epoch)
 
-        # --- Move tensors to CPU before saving ---
         cpu_checkpoint = {}
         for key, value in checkpoint.items():
             if isinstance(value, dict): # Handle nested dicts (like optimizer state)
@@ -176,14 +171,12 @@ def save_checkpoint(model: torch.nn.Module, optimizer: torch.optim.Optimizer, sc
                 cpu_checkpoint[key] = value.cpu()
             else: # Keep other types as is (epoch, loss)
                 cpu_checkpoint[key] = value
-        # --- End CPU move ---
         logging.debug("[Rank 0]: Moved checkpoint tensors to CPU.")
 
-        # Save the CPU checkpoint atomically (save to temp, then rename)
         tmp_filename = filename + ".tmp"
         torch.save(cpu_checkpoint, tmp_filename)
-        os.rename(tmp_filename, filename) # Atomic rename
-        logging.info(f"[Rank 0]: Checkpoint saved successfully to {filename} (Epoch {epoch+1})") # Log epoch+1 for clarity
+        os.rename(tmp_filename, filename) 
+        logging.info(f"[Rank 0]: Checkpoint saved successfully to {filename} (Epoch {epoch+1})") 
 
     except Exception as e:
         logging.error(f"[Rank 0]: Failed to save checkpoint to {filename}: {e}", exc_info=True)
@@ -228,7 +221,6 @@ def load_checkpoint(filename: str, model: torch.nn.Module, optimizer: torch.opti
         checkpoint = torch.load(filename, map_location='cpu')
         logging.info(f"Rank {rank}: Loading checkpoint from {filename} (loaded to CPU).")
 
-        # --- Load Model State ---
         model_to_load = model
         if hasattr(model_to_load, '_orig_mod'): model_to_load = model_to_load._orig_mod
         if isinstance(model_to_load, DDP): model_to_load = model_to_load.module
@@ -238,17 +230,15 @@ def load_checkpoint(filename: str, model: torch.nn.Module, optimizer: torch.opti
             missing_keys, unexpected_keys = model_to_load.load_state_dict(checkpoint['model_state_dict'], strict=False)
             if missing_keys: logging.warning(f"Rank {rank}: Missing keys when loading model state_dict: {missing_keys}")
             if unexpected_keys: logging.warning(f"Rank {rank}: Unexpected keys when loading model state_dict: {unexpected_keys}")
-            model.to(device) # Move the potentially wrapped model to the correct device *after* loading state dict
+            model.to(device) 
             logging.info(f"Rank {rank}: Model state loaded and model moved to {device}.")
         except Exception as e:
             logging.error(f"Rank {rank}: Error loading model state_dict: {e}. Model weights may be incorrect.", exc_info=True)
 
-        # --- Load Optimizer State ---
         if 'optimizer_state_dict' in checkpoint:
             try:
                 optimizer_state_dict = checkpoint['optimizer_state_dict']
-                # Move optimizer state tensors to the correct device *before* loading
-                optimizer_state_dict_device = copy.deepcopy(optimizer_state_dict) # Modify copy
+                optimizer_state_dict_device = copy.deepcopy(optimizer_state_dict) 
                 for state_id, state_val in optimizer_state_dict_device.get('state', {}).items():
                     for k, v in state_val.items():
                         if isinstance(v, torch.Tensor):
@@ -256,7 +246,6 @@ def load_checkpoint(filename: str, model: torch.nn.Module, optimizer: torch.opti
                                 state_val[k] = v.to(device)
                             except Exception as e_opt_tensor:
                                 logging.error(f"Rank {rank}: Failed to move optimizer state tensor {k} (state {state_id}) to {device}: {e_opt_tensor}")
-                        # Handle potential nested dicts in optimizer state if necessary
                         elif isinstance(v, dict):
                              for k_n, v_n in v.items():
                                   if isinstance(v_n, torch.Tensor):
@@ -272,7 +261,6 @@ def load_checkpoint(filename: str, model: torch.nn.Module, optimizer: torch.opti
         else:
             logging.warning(f"Rank {rank}: Optimizer state ('optimizer_state_dict') not found in checkpoint.")
 
-        # --- Load Scheduler State ---
         if 'scheduler_state_dict' in checkpoint:
             try:
                 scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
@@ -282,7 +270,6 @@ def load_checkpoint(filename: str, model: torch.nn.Module, optimizer: torch.opti
         else:
              logging.warning(f"Rank {rank}: Scheduler state ('scheduler_state_dict') not found in checkpoint.")
 
-        # --- Load Epoch and Loss ---
         start_epoch = checkpoint.get('epoch', -1) + 1 # Resume from the next epoch
         best_loss = checkpoint.get('loss', float('inf'))
         logging.info(f"Rank {rank}: Checkpoint loaded. Resuming from epoch {start_epoch}. Previous best loss: {best_loss:.4f}")
@@ -305,8 +292,6 @@ def load_checkpoint(filename: str, model: torch.nn.Module, optimizer: torch.opti
 
     return start_epoch, best_loss
 
-
-# --- Teacher Model Utilities ---
 
 def load_pretrained_teacher_weights(model: torch.nn.Module, pretrained_path: str) -> torch.nn.Module:
     """
@@ -333,7 +318,6 @@ def load_pretrained_teacher_weights(model: torch.nn.Module, pretrained_path: str
         checkpoint = torch.load(pretrained_path, map_location='cpu')
         logger.info(f"Rank {rank} [LOAD_TEACHER]: Loaded checkpoint from {pretrained_path}")
 
-        # --- Extract State Dictionary ---
         state_dict = None
         if 'model_state_dict' in checkpoint: state_dict = checkpoint['model_state_dict']
         elif 'state_dict' in checkpoint: state_dict = checkpoint['state_dict']
@@ -346,9 +330,7 @@ def load_pretrained_teacher_weights(model: torch.nn.Module, pretrained_path: str
              logger.error(f"Rank {rank} [LOAD_TEACHER]: Could not extract state_dict from checkpoint.")
              return model
         logger.info(f"Rank {rank} [LOAD_TEACHER]: Using state_dict with {len(state_dict)} keys.")
-        # --- End Extract ---
 
-        # --- Get Target Model's State Dict (Should be unwrapped) ---
         if isinstance(model, (DDP, torch.nn.modules.lazy.LazyModuleMixin)): # Check if accidentally wrapped
             logger.warning(f"Rank {rank} [LOAD_TEACHER]: `load_pretrained_teacher_weights` called on a potentially wrapped model ({type(model).__name__}). Unwrapping first.")
             if hasattr(model, '_orig_mod'): model = model._orig_mod
@@ -359,10 +341,6 @@ def load_pretrained_teacher_weights(model: torch.nn.Module, pretrained_path: str
         if not model_dict:
              logger.error(f"Rank {rank} [LOAD_TEACHER]: Target model state_dict is empty.")
              return model
-        # --- End Target Prep ---
-
-        # --- Process Checkpoint Keys & Load ---
-        # Remove 'module.' prefix if present in checkpoint keys, as target model is assumed unwrapped
         processed_state_dict = {}
         has_module_prefix = False
         for k, v in state_dict.items():
@@ -374,7 +352,6 @@ def load_pretrained_teacher_weights(model: torch.nn.Module, pretrained_path: str
         if has_module_prefix:
             logger.info(f"Rank {rank} [LOAD_TEACHER]: Removed 'module.' prefix from checkpoint keys.")
 
-        # Load state dict (strict=False allows mismatches)
         load_result = model.load_state_dict(processed_state_dict, strict=False)
 
         if load_result.missing_keys:
@@ -416,7 +393,6 @@ def refresh_teacher(student_model: torch.nn.Module, teacher_model: torch.nn.Modu
         t_core = _unwrap(teacher_model)
         logging.debug(f"Rank {rank}: Refreshing teacher ({type(t_core).__name__}) from student ({type(s_core).__name__})")
 
-        # --- Copy weights using state_dict ---
         with torch.no_grad():
             student_state = s_core.state_dict()
             load_result = t_core.load_state_dict(student_state, strict=True) # Use strict=True for refresh
@@ -424,7 +400,6 @@ def refresh_teacher(student_model: torch.nn.Module, teacher_model: torch.nn.Modu
             # if load_result.missing_keys or load_result.unexpected_keys:
             #      logger.warning(f"Rank {rank}: Mismatch during teacher refresh. Missing: {load_result.missing_keys}, Unexpected: {load_result.unexpected_keys}")
 
-        # --- Freeze teacher parameters ---
         # Freeze parameters of the core teacher model
         for p in t_core.parameters():
             p.requires_grad = False
