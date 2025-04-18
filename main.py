@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Main training script using Distributed Data Parallel (DDP).
 
@@ -8,34 +7,26 @@ Handles checkpointing and logging. Uses torchrun for launching.
 
 import torch
 import torch.nn as nn
-# import torch.optim as optim # Optimizer is imported from optimizer.py
+# import torch.optim as optim 
 import torchvision
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 import os
 import time
 import math
-# from tqdm import tqdm # tqdm is used within engine.py
+# from tqdm import tqdm 
 import logging
-
-# --- Imports for Distributed Training ---
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
-# --- End Imports ---
-
-# --- Imports for Mixed Precision ---
 from torch.cuda.amp import GradScaler
-# --- End Mixed Precision ---
-
-# --- Project specific imports ---
 from config import Config
 from model import VisionTransformer, VisionTransformer1
 from optimizer import SOAP # Import custom optimizer
 from utils import (setup, cleanup, is_main_process, save_checkpoint,
                    load_checkpoint, log_to_file, load_pretrained_teacher_weights, refresh_teacher)
 from engine import train, evaluate # Import train/eval functions
-# --- End Project Imports ---
+
 
 
 # --- Set up logging ---
